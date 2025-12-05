@@ -1,6 +1,6 @@
 
 import { GlobalData, Book, Transaction, Category, RecurringRule, TransactionType, Account } from '../types';
-import { createNewBook, DEFAULT_CURRENCY, AVAILABLE_COLORS, ICON_KEYS, DEFAULT_ACCOUNTS } from '../constants';
+import { createNewBook, DEFAULT_CURRENCY, AVAILABLE_COLORS, ICON_KEYS, DEFAULT_ACCOUNTS, ICON_MAP, DEFAULT_CATEGORIES } from '../constants';
 
 export { createNewBook };
 
@@ -48,10 +48,9 @@ export const createDefaultData = (): GlobalData => {
 export const resetAppData = () => {
     try {
         console.log("Resetting app data...");
-        // Explicitly remove our key first
         localStorage.removeItem(STORAGE_KEY);
-        // Then clear everything to be safe
-        localStorage.clear();
+        localStorage.removeItem('onewallet_data_v1'); // Remove legacy key
+        localStorage.clear(); // Nuclear option to be sure
         return true;
     } catch (e) {
         console.error("Failed to reset data", e);
@@ -221,77 +220,320 @@ export const exportDataToJSON = (data: GlobalData) => {
   URL.revokeObjectURL(href);
 };
 
-export const exportTransactionsToCSV = (book: Book, allBooks: Book[] = []) => {
-  // Added 'Wallet' as the first column
-  const headers = ['Wallet', 'Date', 'Type', 'Amount', 'Currency', 'Category', 'Subcategory', 'Account', 'To Account', 'Target Amount', 'Target Currency', 'Note', 'Tags'];
+export const exportTransactionsToCSV = (primaryBook: Book, allBooks: Book[] = []) => {
+  // If allBooks provided, export all. Otherwise just the single book.
+  const booksToExport = allBooks.length > 0 ? allBooks : [primaryBook];
   
-  const rows = book.transactions.map(t => {
-      let categoryName = '';
-      let subCategoryName = '';
-      
-      if (t.categoryId) {
-         const cat = book.categories.find(c => c.id === t.categoryId);
-         if (cat) {
-             if (cat.parentId) {
-                 const parent = book.categories.find(p => p.id === cat.parentId);
-                 categoryName = parent?.name || '';
-                 subCategoryName = cat.name;
-             } else {
-                 categoryName = cat.name;
+  // Added 'Target Wallet' column
+  const headers = ['Wallet', 'Date', 'Type', 'Amount', 'Currency', 'Category', 'Subcategory', 'Account', 'Target Wallet', 'To Account', 'Target Amount', 'Target Currency', 'Note', 'Tags'];
+  
+  let allRows: string[] = [];
+
+  booksToExport.forEach(b => {
+      const rows = b.transactions.map(t => {
+          let categoryName = '';
+          let subCategoryName = '';
+          
+          if (t.categoryId) {
+             const cat = b.categories.find(c => c.id === t.categoryId);
+             if (cat) {
+                 if (cat.parentId) {
+                     const parent = b.categories.find(p => p.id === cat.parentId);
+                     categoryName = parent?.name || '';
+                     subCategoryName = cat.name;
+                 } else {
+                     categoryName = cat.name;
+                 }
              }
-         }
-      }
+          }
 
-      const account = book.accounts.find(a => a.id === t.accountId)?.name || 'Unknown';
-      const toAccount = t.toAccountId ? (book.accounts.find(a => a.id === t.toAccountId)?.name || 'External') : '';
-      
-      let targetAmount = '';
-      let targetCurrency = '';
+          const account = b.accounts.find(a => a.id === t.accountId)?.name || 'Unknown';
+          
+          // Target Details
+          let targetWallet = '';
+          let toAccount = '';
+          let targetAmount = '';
+          let targetCurrency = '';
 
-      if (t.type === 'transfer' && t.relatedBookId && allBooks.length > 0) {
-           const targetBook = allBooks.find(b => b.id === t.relatedBookId);
-           if (targetBook) {
-               targetCurrency = targetBook.currency;
-               // Try to find paired transaction: Same date, same type, related to this book
-               const pair = targetBook.transactions.find(tx => 
-                   tx.relatedBookId === book.id && 
-                   tx.date === t.date && 
-                   tx.type === 'transfer'
-               );
-               if (pair) {
-                   targetAmount = pair.amount.toString();
-               }
-           }
-      }
+          if (t.type === 'transfer') {
+              // 1. Determine Target Book/Wallet
+              let targetBook: Book | undefined;
+              
+              if (t.relatedBookId) {
+                  targetBook = allBooks.find(bk => bk.id === t.relatedBookId);
+              } else {
+                  // Internal transfer or implicit within same book
+                  targetBook = b;
+              }
 
-      const note = (t.note || '').replace(/"/g, '""'); 
-      const tags = (t.tags || []).join(';');
-      
-      return [
-          `"${book.name}"`, // Wallet Name
-          `"${t.date}"`,
-          `"${t.type}"`,
-          t.amount,
-          `"${book.currency}"`,
-          `"${categoryName}"`,
-          `"${subCategoryName}"`,
-          `"${account}"`,
-          `"${toAccount}"`,
-          targetAmount,
-          `"${targetCurrency}"`,
-          `"${note}"`,
-          `"${tags}"`
-      ].join(',');
+              // 2. Resolve Account Name and Wallet Name if we can find the account explicitly
+              if (t.toAccountId) {
+                  // Try to find account in the assumed target book first
+                  let acc = targetBook?.accounts.find(a => a.id === t.toAccountId);
+                  
+                  // If not found, search all books (maybe data inconsistency or implicit cross-book)
+                  if (!acc && allBooks.length > 0) {
+                      for (const curr of allBooks) {
+                          acc = curr.accounts.find(a => a.id === t.toAccountId);
+                          if (acc) {
+                              targetBook = curr;
+                              break;
+                          }
+                      }
+                  }
+
+                  if (acc) {
+                      toAccount = acc.name;
+                      targetWallet = targetBook?.name || '';
+                  } else {
+                      toAccount = 'Unknown';
+                      targetWallet = targetBook?.name || '';
+                  }
+              }
+
+              // 3. Resolve Target Amount/Currency
+              if (targetBook) {
+                   targetCurrency = targetBook.currency;
+                   // Try to find paired transaction
+                   if (targetBook.id !== b.id) {
+                        const pair = targetBook.transactions.find(tx => 
+                            tx.relatedBookId === b.id && 
+                            Math.abs(new Date(tx.date).getTime() - new Date(t.date).getTime()) < 5000 && // rough sync buffer
+                            tx.type === 'transfer'
+                        );
+                        if (pair) {
+                            targetAmount = pair.amount.toString();
+                        }
+                   }
+              }
+          }
+
+          const note = (t.note || '').replace(/"/g, '""'); 
+          const tags = (t.tags || []).join(';');
+          
+          return [
+              `"${b.name}"`, // Wallet Name
+              `"${t.date}"`,
+              `"${t.type}"`,
+              t.amount,
+              `"${b.currency}"`,
+              `"${categoryName}"`,
+              `"${subCategoryName}"`,
+              `"${account}"`,
+              `"${targetWallet}"`, // New Column
+              `"${toAccount}"`,
+              targetAmount,
+              `"${targetCurrency}"`,
+              `"${note}"`,
+              `"${tags}"`
+          ].join(',');
+      });
+      allRows = [...allRows, ...rows];
   });
 
-  const csvContent = [headers.join(','), ...rows].join('\n');
+  const csvContent = [headers.join(','), ...allRows].join('\n');
   const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
   const href = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = href;
-  link.download = `onewallet_export_${book.name.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.csv`;
+  
+  const fileNamePrefix = booksToExport.length > 1 ? 'onewallet_full_export' : `onewallet_export_${booksToExport[0].name.replace(/\s+/g, '_')}`;
+  link.download = `${fileNamePrefix}_${new Date().toISOString().split('T')[0]}.csv`;
+  
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
   URL.revokeObjectURL(href);
+};
+
+// --- CSV IMPORT UTILITIES ---
+
+// Basic CSV Line Parser dealing with quotes
+const parseCSVLine = (line: string): string[] => {
+    const result = [];
+    let startValueIndex = 0;
+    let inQuotes = false;
+
+    for (let i = 0; i < line.length; i++) {
+        if (line[i] === '"') {
+            inQuotes = !inQuotes;
+        } else if (line[i] === ',' && !inQuotes) {
+            let val = line.substring(startValueIndex, i).trim();
+            // Remove surrounding quotes if present
+            if (val.startsWith('"') && val.endsWith('"')) {
+                val = val.substring(1, val.length - 1).replace(/""/g, '"');
+            }
+            result.push(val);
+            startValueIndex = i + 1;
+        }
+    }
+    // Push last value
+    let lastVal = line.substring(startValueIndex).trim();
+    if (lastVal.startsWith('"') && lastVal.endsWith('"')) {
+        lastVal = lastVal.substring(1, lastVal.length - 1).replace(/""/g, '"');
+    }
+    result.push(lastVal);
+    return result;
+};
+
+export const processCSVImport = (csvText: string, currentData: GlobalData): { data: GlobalData, count: number } => {
+    const lines = csvText.split(/\r?\n/).filter(line => line.trim() !== '');
+    if (lines.length < 2) return { data: currentData, count: 0 };
+
+    // 1. Identify Headers
+    const headers = parseCSVLine(lines[0]).map(h => h.toLowerCase().replace(/[\s_"]/g, ''));
+    
+    // Map headers to standard keys
+    const mapIndex: Record<string, number> = {};
+    headers.forEach((h, i) => {
+        if (h.includes('date')) mapIndex['date'] = i;
+        else if (h.includes('amount') && !h.includes('target')) mapIndex['amount'] = i;
+        else if (h.includes('subcategory')) mapIndex['subcategory'] = i;
+        else if (h.includes('category')) mapIndex['category'] = i;
+        else if (h.includes('note') || h.includes('desc')) mapIndex['note'] = i;
+        else if (h.includes('tag')) mapIndex['tags'] = i;
+        else if (h.includes('account') && !h.includes('to')) mapIndex['account'] = i; // Source account only
+        else if (h.includes('wallet') || h.includes('book')) mapIndex['wallet'] = i;
+        else if (h.includes('currency') && !h.includes('target')) mapIndex['currency'] = i;
+        else if (h.includes('type')) mapIndex['type'] = i; // expense/income/transfer
+    });
+
+    if (mapIndex['date'] === undefined || mapIndex['amount'] === undefined) {
+        throw new Error("CSV must contain at least 'Date' and 'Amount' columns.");
+    }
+
+    let updatedBooks = [...currentData.books];
+    let importCount = 0;
+
+    // 2. Process Rows
+    for (let i = 1; i < lines.length; i++) {
+        const row = parseCSVLine(lines[i]);
+        if (row.length < headers.length) continue;
+
+        const dateStr = row[mapIndex['date']];
+        const amountStr = row[mapIndex['amount']];
+        
+        let date = new Date(dateStr);
+        if (isNaN(date.getTime())) date = new Date(); // Fallback to today
+
+        let amount = parseFloat(amountStr.replace(/[^0-9.-]/g, ''));
+        if (isNaN(amount)) continue;
+
+        // Determine Type
+        let type: TransactionType = 'expense';
+        const typeStr = mapIndex['type'] !== undefined ? row[mapIndex['type']].toLowerCase() : '';
+        if (typeStr.includes('inc') || typeStr.includes('credit') || amount > 0) type = 'income';
+        if (typeStr.includes('exp') || typeStr.includes('debit') || amount < 0) type = 'expense';
+        if (typeStr.includes('trans')) type = 'transfer';
+        
+        // Handle signed amounts in CSV where usually expenses are negative
+        if (mapIndex['type'] === undefined) {
+             if (amount < 0) {
+                 type = 'expense';
+                 amount = Math.abs(amount);
+             } else {
+                 type = 'income';
+             }
+        } else {
+            amount = Math.abs(amount);
+        }
+
+        // Wallet Logic
+        let walletName = mapIndex['wallet'] !== undefined ? row[mapIndex['wallet']] : 'Imported Wallet';
+        if (!walletName) walletName = updatedBooks[0].name; // Default to first book if empty
+        
+        let bookIndex = updatedBooks.findIndex(b => b.name.toLowerCase() === walletName.toLowerCase());
+        
+        if (bookIndex === -1) {
+            // Create New Book
+            const currency = mapIndex['currency'] !== undefined ? row[mapIndex['currency']] : DEFAULT_CURRENCY;
+            const newBook = createNewBook(walletName, currency || '$');
+            updatedBooks.push(newBook);
+            bookIndex = updatedBooks.length - 1;
+        }
+
+        const book = updatedBooks[bookIndex];
+
+        // Account Logic
+        let accountName = mapIndex['account'] !== undefined ? row[mapIndex['account']] : 'Cash';
+        if (!accountName) accountName = 'Cash';
+        let accountId = book.accounts.find(a => a.name.toLowerCase() === accountName.toLowerCase())?.id;
+        
+        if (!accountId) {
+            // Create New Account
+            const newAcc: Account = {
+                id: crypto.randomUUID(),
+                name: accountName,
+                type: 'cash',
+                initialBalance: 0,
+                color: AVAILABLE_COLORS[Math.floor(Math.random() * AVAILABLE_COLORS.length)],
+                icon: 'Wallet'
+            };
+            book.accounts.push(newAcc);
+            accountId = newAcc.id;
+        }
+
+        // Category Logic
+        let categoryId: string | undefined = undefined;
+        if (type !== 'transfer') {
+            const catName = mapIndex['category'] !== undefined ? row[mapIndex['category']] : 'Uncategorized';
+            const subCatName = mapIndex['subcategory'] !== undefined ? row[mapIndex['subcategory']] : '';
+            
+            // Find Main Category
+            let mainCat = book.categories.find(c => c.name.toLowerCase() === catName.toLowerCase() && !c.parentId && c.type === type);
+            
+            if (!mainCat && catName) {
+                mainCat = {
+                    id: crypto.randomUUID(),
+                    name: catName,
+                    icon: 'ShoppingBag',
+                    color: AVAILABLE_COLORS[Math.floor(Math.random() * AVAILABLE_COLORS.length)],
+                    type: type as 'expense' | 'income'
+                };
+                book.categories.push(mainCat);
+            }
+
+            if (mainCat) {
+                if (subCatName) {
+                    // Find Subcategory
+                    let subCat = book.categories.find(c => c.parentId === mainCat!.id && c.name.toLowerCase() === subCatName.toLowerCase());
+                    if (!subCat) {
+                        subCat = {
+                            id: crypto.randomUUID(),
+                            parentId: mainCat.id,
+                            name: subCatName,
+                            icon: mainCat.icon,
+                            color: mainCat.color,
+                            type: type as 'expense' | 'income'
+                        };
+                        book.categories.push(subCat);
+                    }
+                    categoryId = subCat.id;
+                } else {
+                    categoryId = mainCat.id;
+                }
+            }
+        }
+
+        // Create Transaction
+        const newTx: Transaction = {
+            id: crypto.randomUUID(),
+            amount: amount,
+            date: date.toISOString(),
+            type: type,
+            accountId: accountId,
+            categoryId: categoryId,
+            note: mapIndex['note'] !== undefined ? row[mapIndex['note']] : '',
+            tags: mapIndex['tags'] !== undefined ? row[mapIndex['tags']].split(';').map(s => s.trim()).filter(s => s) : [],
+            updatedAt: new Date().toISOString()
+        };
+
+        book.transactions.push(newTx);
+        importCount++;
+    }
+
+    return { 
+        data: { ...currentData, books: updatedBooks },
+        count: importCount
+    };
 };

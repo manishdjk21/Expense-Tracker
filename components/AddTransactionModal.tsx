@@ -256,7 +256,9 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSave, onDelet
     onClose();
   };
   
-  const handleDeleteTx = () => {
+  const handleDeleteTx = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      e.preventDefault();
       if (initialData && onDelete) {
           if (confirm("Are you sure you want to delete this transaction?")) {
               onDelete(initialData.id);

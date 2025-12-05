@@ -1,14 +1,15 @@
 
 import React, { useRef, useState, useEffect } from 'react';
-import { GlobalData, Book, Category, SyncConfig, BackupConfig, Transaction } from '../types';
+import { GlobalData, Book, Category, BackupConfig, Transaction } from '../types';
 import { exportDataToJSON, exportTransactionsToCSV } from '../services/storageService';
-import { Download, Upload, FileText, Trash2, Wallet, Plus, Check, ChevronRight, ChevronDown, Edit2, X, Save, RefreshCw, Circle, Smartphone, Cloud, HardDrive, AlertTriangle } from 'lucide-react';
+import { Download, Upload, FileText, Trash2, Wallet, Plus, Check, ChevronRight, ChevronDown, Edit2, X, Save, RefreshCw, Circle, Smartphone, Cloud, HardDrive, AlertTriangle, FileSpreadsheet, LogOut, Copy } from 'lucide-react';
 import { ICON_MAP, ICON_KEYS, AVAILABLE_COLORS } from '../constants';
 
 interface Props {
   data: GlobalData;
   activeBook: Book;
   onImport: (newData: GlobalData) => void;
+  onImportCSV: (csvText: string) => void;
   onImportTransactions: (txs: any[]) => void;
   onBulkImport: (txs: Transaction[], cats: Category[]) => void;
   onReset: () => void;
@@ -19,19 +20,21 @@ interface Props {
   onDeleteBook: (id: string) => void;
   onAddCategory: (cat: Category) => void;
   onUpdateUser: (name: string) => void;
-  onConfigureSync: (config: SyncConfig) => void;
   onConfigureBackup?: (config: BackupConfig) => void;
-  syncStatus: 'disconnected' | 'connecting' | 'connected';
   installPrompt: any;
+  walletId: string | null;
+  onLogout: () => void;
 }
 
 const Settings: React.FC<Props> = ({ 
-    data, activeBook, onImport, onImportTransactions, onBulkImport, onReset, onClearData,
+    data, activeBook, onImport, onImportCSV, onImportTransactions, onBulkImport, onReset, onClearData,
     onSwitchBook, onAddBook, onUpdateBook, onDeleteBook, 
-    onAddCategory, onUpdateUser, onConfigureSync, onConfigureBackup, syncStatus,
-    installPrompt
+    onAddCategory, onUpdateUser, onConfigureBackup,
+    installPrompt, walletId, onLogout
 }) => {
   const jsonInputRef = useRef<HTMLInputElement>(null);
+  const csvInputRef = useRef<HTMLInputElement>(null);
+
   const [newBookName, setNewBookName] = useState('');
   const [newBookCurrency, setNewBookCurrency] = useState('€');
   const [isAddingBook, setIsAddingBook] = useState(false);
@@ -50,14 +53,10 @@ const Settings: React.FC<Props> = ({
   const [newCatColor, setNewCatColor] = useState('#fbbf24');
   const [newCatType, setNewCatType] = useState<'expense' | 'income'>('expense');
 
-  // Sync State
+  // User State
   const [isEditingUser, setIsEditingUser] = useState(false);
   const [userName, setUserName] = useState('');
   
-  const [familyName, setFamilyName] = useState(data.syncConfig?.familyName || '');
-  const [userSlot, setUserSlot] = useState<1 | 2>(data.syncConfig?.slot || 1);
-  const [isSyncExpanded, setIsSyncExpanded] = useState(!data.syncConfig?.enabled);
-
   // Backup State
   const [backupFreq, setBackupFreq] = useState<'daily' | 'weekly' | 'monthly'>(data.backupConfig?.frequency || 'daily');
   const [backupProvider, setBackupProvider] = useState<'google_drive' | 'dropbox' | 'local' | null>(data.backupConfig?.provider || null);
@@ -82,6 +81,19 @@ const Settings: React.FC<Props> = ({
     };
     reader.readAsText(file);
     if (jsonInputRef.current) jsonInputRef.current.value = '';
+  };
+
+  const handleCSVUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (event) => {
+          if (event.target?.result) {
+              onImportCSV(event.target.result as string);
+          }
+      };
+      reader.readAsText(file);
+      if (csvInputRef.current) csvInputRef.current.value = '';
   };
 
   const handleCreateBook = () => {
@@ -146,27 +158,6 @@ const Settings: React.FC<Props> = ({
       }
   };
 
-  const handleStartSync = () => {
-      if (!familyName) return;
-      onConfigureSync({
-          familyName,
-          slot: userSlot,
-          enabled: true
-      });
-      setIsSyncExpanded(false);
-  };
-
-  const handleStopSync = () => {
-      onConfigureSync({
-          familyName: '',
-          slot: 1,
-          enabled: false
-      });
-      setFamilyName('');
-      setUserSlot(1);
-      setIsSyncExpanded(true);
-  };
-
   const handleBackupConfigChange = (provider: 'google_drive' | 'dropbox' | 'local' | null) => {
       setBackupProvider(provider);
       if (onConfigureBackup) {
@@ -208,8 +199,15 @@ const Settings: React.FC<Props> = ({
   };
 
   const confirmFactoryReset = () => {
-      if (window.confirm("CRITICAL WARNING: This will delete ALL data (Wallets, Categories, Transactions) and reset the app to its initial install state. This action cannot be undone. Are you sure?")) {
+      if (window.confirm("CRITICAL WARNING: This will delete ALL data locally and disconnect from cloud. Are you sure?")) {
           onReset();
+      }
+  };
+
+  const copyWalletId = () => {
+      if (walletId) {
+          navigator.clipboard.writeText(walletId);
+          alert("Wallet ID copied to clipboard!");
       }
   };
 
@@ -219,17 +217,52 @@ const Settings: React.FC<Props> = ({
     <div className="flex-1 overflow-y-auto pb-24 p-4 no-scrollbar relative">
       <h2 className="text-2xl font-bold text-gray-800 mb-6">Settings</h2>
 
+      {/* Sync Status Banner */}
+      <section className="bg-gradient-to-r from-indigo-600 to-purple-600 rounded-2xl p-6 shadow-lg mb-6 text-white relative overflow-hidden">
+          <div className="relative z-10">
+              <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                      <Cloud size={20} className="text-indigo-200"/>
+                      <h3 className="font-bold text-lg">Cloud Sync Active</h3>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs font-bold bg-white/20 px-2 py-1 rounded-full">
+                      <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
+                      Online
+                  </div>
+              </div>
+              <div className="mt-4 bg-white/10 p-3 rounded-xl flex items-center justify-between">
+                  <div>
+                      <div className="text-[10px] text-indigo-200 uppercase font-bold">Wallet ID</div>
+                      <div className="font-mono text-sm font-bold tracking-wider">{walletId}</div>
+                  </div>
+                  <button onClick={copyWalletId} className="p-2 hover:bg-white/20 rounded-lg transition-colors">
+                      <Copy size={16}/>
+                  </button>
+              </div>
+              <div className="mt-2 text-[10px] text-indigo-200">
+                  Share this ID with family members to join this wallet.
+              </div>
+          </div>
+          <button 
+             onClick={onLogout}
+             className="absolute top-4 right-4 p-2 text-white/50 hover:text-white hover:bg-white/10 rounded-full"
+             title="Switch Wallet"
+          >
+              <LogOut size={16} />
+          </button>
+      </section>
+
       {/* Install App Banner (Visible if supported) */}
       {installPrompt && (
-        <section className="bg-gradient-to-r from-blue-600 to-indigo-600 rounded-2xl p-6 shadow-lg mb-6 text-white flex items-center justify-between">
+        <section className="bg-white border border-blue-100 rounded-2xl p-6 shadow-sm mb-6 flex items-center justify-between">
             <div>
-                <h3 className="font-bold text-lg">Install OneWallet</h3>
-                <p className="text-xs text-blue-100 opacity-90 mt-1">Get the native app experience on your home screen.</p>
+                <h3 className="font-bold text-sm text-blue-900">Install App</h3>
+                <p className="text-xs text-blue-400 mt-1">Add to home screen</p>
             </div>
             <button 
               type="button"
               onClick={handleInstallClick}
-              className="bg-white text-blue-600 px-4 py-2 rounded-lg font-bold text-xs shadow-md hover:bg-blue-50 transition-colors flex items-center gap-2"
+              className="bg-blue-50 text-blue-600 px-4 py-2 rounded-lg font-bold text-xs hover:bg-blue-100 transition-colors flex items-center gap-2"
             >
                 <Smartphone size={16} /> Install
             </button>
@@ -265,71 +298,14 @@ const Settings: React.FC<Props> = ({
                 ) : (
                     <h3 className="text-lg font-bold text-gray-800">{currentUser?.name}</h3>
                 )}
-                <div className="text-xs text-gray-400 mt-1">
-                    {data.syncConfig?.enabled ? `Linked: ${data.syncConfig.familyName} (User ${data.syncConfig.slot})` : 'Offline Account'}
-                </div>
             </div>
          </div>
       </section>
 
-      {/* Cloud Backup & Export Section */}
+      {/* Data Management Section */}
       <section className="bg-white rounded-2xl p-6 shadow-sm mb-6">
         <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-4">Data Management</h3>
         
-        {/* Scheduled Cloud Backup UI */}
-        <div className="mb-6 pb-6 border-b border-gray-100">
-             <div className="flex items-center gap-2 mb-3">
-                 <Cloud size={18} className="text-blue-500"/>
-                 <h4 className="text-sm font-bold text-gray-700">Scheduled Backup</h4>
-             </div>
-             
-             <div className="bg-gray-50 rounded-xl p-4">
-                <div className="flex gap-2 mb-4">
-                     <button 
-                        type="button"
-                        onClick={() => handleBackupConfigChange('google_drive')}
-                        className={`flex-1 py-3 px-2 rounded-lg text-xs font-bold border transition-all flex flex-col items-center gap-1 ${backupProvider === 'google_drive' ? 'bg-white border-blue-500 text-blue-600 shadow-sm' : 'bg-transparent border-transparent text-gray-500 hover:bg-white'}`}
-                     >
-                         <span>Google Drive</span>
-                     </button>
-                     <button 
-                        type="button"
-                        onClick={() => handleBackupConfigChange('dropbox')}
-                        className={`flex-1 py-3 px-2 rounded-lg text-xs font-bold border transition-all flex flex-col items-center gap-1 ${backupProvider === 'dropbox' ? 'bg-white border-blue-600 text-blue-700 shadow-sm' : 'bg-transparent border-transparent text-gray-500 hover:bg-white'}`}
-                     >
-                         <span>Dropbox</span>
-                     </button>
-                     <button 
-                        type="button"
-                        onClick={() => handleBackupConfigChange(null)}
-                        className={`py-3 px-4 rounded-lg text-xs font-bold border transition-all ${!backupProvider ? 'bg-gray-200 text-gray-600' : 'bg-transparent text-gray-400'}`}
-                     >
-                         Off
-                     </button>
-                </div>
-
-                {backupProvider && (
-                    <div className="flex items-center justify-between">
-                         <span className="text-xs font-semibold text-gray-500">Frequency:</span>
-                         <select 
-                            value={backupFreq} 
-                            onChange={(e) => handleBackupFreqChange(e.target.value as any)}
-                            className="bg-white border border-gray-200 text-gray-700 text-xs font-bold py-1.5 px-3 rounded-lg outline-none"
-                        >
-                             <option value="daily">Daily</option>
-                             <option value="weekly">Weekly</option>
-                             <option value="monthly">Monthly</option>
-                         </select>
-                    </div>
-                )}
-             </div>
-             {backupProvider && (
-                 <div className="mt-2 text-[10px] text-gray-400 text-center">
-                     * This requires manual authorization. You will be prompted to download the backup file when due.
-                 </div>
-             )}
-        </div>
-
         {/* CSV Export */}
         <div className="mb-6 pb-6 border-b border-gray-100">
              <div className="flex items-center gap-2 mb-3">
@@ -345,20 +321,20 @@ const Settings: React.FC<Props> = ({
              </button>
         </div>
 
-        {/* JSON Backup/Restore */}
+        {/* Import & Backup */}
         <div>
              <div className="flex items-center gap-2 mb-3">
                  <HardDrive size={18} className="text-purple-500"/>
-                 <h4 className="text-sm font-bold text-gray-700">Full Backup (JSON)</h4>
+                 <h4 className="text-sm font-bold text-gray-700">Import / Backup</h4>
              </div>
-             <div className="grid grid-cols-2 gap-3">
+             <div className="grid grid-cols-2 gap-3 mb-3">
                 <button 
                     type="button"
                     onClick={() => exportDataToJSON(data)}
                     className="flex flex-col items-center justify-center p-3 bg-purple-50 rounded-xl text-purple-700 hover:bg-purple-100 transition-colors gap-1"
                 >
                     <Download size={20} /> 
-                    <span className="text-xs font-bold">Backup</span>
+                    <span className="text-xs font-bold">Backup JSON</span>
                 </button>
                 <button 
                     type="button"
@@ -366,10 +342,20 @@ const Settings: React.FC<Props> = ({
                     className="flex flex-col items-center justify-center p-3 bg-blue-50 rounded-xl text-blue-700 hover:bg-blue-100 transition-colors gap-1"
                 >
                     <Upload size={20} />
-                    <span className="text-xs font-bold">Restore</span>
+                    <span className="text-xs font-bold">Restore JSON</span>
                 </button>
                 <input type="file" accept=".json" ref={jsonInputRef} onChange={handleJsonUpload} className="hidden" />
              </div>
+
+             {/* CSV Import Button */}
+             <button 
+                type="button"
+                onClick={() => csvInputRef.current?.click()}
+                className="w-full flex items-center justify-center gap-2 p-3 bg-orange-50 text-orange-600 rounded-xl hover:bg-orange-100 transition-colors font-bold text-xs"
+             >
+                <FileSpreadsheet size={18} /> Import CSV
+             </button>
+             <input type="file" accept=".csv" ref={csvInputRef} onChange={handleCSVUpload} className="hidden" />
         </div>
       </section>
 
@@ -393,98 +379,6 @@ const Settings: React.FC<Props> = ({
                  <RefreshCw size={16}/> Factory Reset App
              </button>
          </div>
-         <p className="text-[10px] text-red-400 mt-3 text-center leading-relaxed">
-             * Clearing transactions removes expense and income history. Factory reset deletes EVERYTHING including categories and wallets.
-         </p>
-      </section>
-
-      {/* Simplified Family Sync Section */}
-      <section className="bg-white rounded-2xl p-6 shadow-sm mb-6 overflow-hidden">
-         <div className="flex items-center justify-between mb-4 cursor-pointer" onClick={() => setIsSyncExpanded(!isSyncExpanded)}>
-             <div className="flex items-center gap-2">
-                 <RefreshCw size={18} className={`text-blue-600 ${syncStatus === 'connecting' ? 'animate-spin' : ''}`}/>
-                 <h3 className="text-sm font-bold text-gray-800 uppercase tracking-wide">Family Sync</h3>
-             </div>
-             <div className="flex items-center gap-2">
-                 {data.syncConfig?.enabled && (
-                     <div className={`flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded-full ${
-                         syncStatus === 'connected' ? 'bg-green-100 text-green-700' : 
-                         syncStatus === 'connecting' ? 'bg-yellow-100 text-yellow-700' : 
-                         'bg-gray-100 text-gray-500'
-                     }`}>
-                         <Circle size={8} fill="currentColor" />
-                         {syncStatus === 'connected' ? 'Connected' : syncStatus === 'connecting' ? 'Searching...' : 'Disconnected'}
-                     </div>
-                 )}
-                 {isSyncExpanded ? <ChevronDown size={16} className="text-gray-400"/> : <ChevronRight size={16} className="text-gray-400"/>}
-             </div>
-         </div>
-         
-         {isSyncExpanded && (
-             <div className="animate-in fade-in slide-in-from-top-2">
-                 {!data.syncConfig?.enabled ? (
-                    <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 mb-2">
-                        <p className="text-xs text-blue-800 mb-4 font-medium leading-relaxed">
-                            Easily sync with your partner. Enter the same Family Name on both devices.
-                        </p>
-                        
-                        <div className="space-y-4">
-                            <div>
-                                <label className="text-[10px] font-bold text-blue-400 uppercase">Family Name</label>
-                                <input 
-                                    value={familyName}
-                                    onChange={e => setFamilyName(e.target.value)}
-                                    placeholder="e.g. SmithWallet"
-                                    className="w-full p-2 text-sm border border-blue-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-300 mt-1"
-                                />
-                            </div>
-
-                            <div>
-                                <label className="text-[10px] font-bold text-blue-400 uppercase">I am...</label>
-                                <div className="flex gap-2 mt-1">
-                                    <button 
-                                        type="button"
-                                        onClick={() => setUserSlot(1)}
-                                        className={`flex-1 py-2 rounded-lg text-xs font-bold border transition-all ${userSlot === 1 ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-500 border-gray-200'}`}
-                                    >
-                                        User 1 (Primary)
-                                    </button>
-                                    <button 
-                                        type="button"
-                                        onClick={() => setUserSlot(2)}
-                                        className={`flex-1 py-2 rounded-lg text-xs font-bold border transition-all ${userSlot === 2 ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-500 border-gray-200'}`}
-                                    >
-                                        User 2 (Partner)
-                                    </button>
-                                </div>
-                            </div>
-
-                            <button 
-                                type="button"
-                                onClick={handleStartSync}
-                                disabled={!familyName}
-                                className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold text-sm shadow-md disabled:opacity-50 hover:bg-blue-700 transition-colors"
-                            >
-                                Start Syncing
-                            </button>
-                        </div>
-                    </div>
-                 ) : (
-                     <div className="space-y-3">
-                         <div className="p-3 bg-gray-50 rounded-lg text-xs text-gray-600">
-                             You are connected as <b>User {data.syncConfig.slot}</b> in family <b>{data.syncConfig.familyName}</b>.
-                         </div>
-                         <button 
-                            type="button"
-                            onClick={handleStopSync}
-                            className="w-full py-2 text-red-500 bg-red-50 hover:bg-red-100 rounded-lg text-xs font-bold"
-                         >
-                             Stop Syncing
-                         </button>
-                     </div>
-                 )}
-             </div>
-         )}
       </section>
 
       {/* Book Management (Same as before) */}

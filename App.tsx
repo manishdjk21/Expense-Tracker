@@ -1,175 +1,247 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { GlobalData, Transaction, Book, RecurringFrequency, RecurringRule, Category, Account, TransactionType, UserProfile, SyncConfig, BackupConfig } from './types';
-import { loadData, saveData, createNewBook, processRecurringTransactions, exportDataToJSON, createDefaultData, resetAppData, clearIncomeExpenseTransactions } from './services/storageService';
+import { GlobalData, Transaction, Book, RecurringFrequency, Category, Account, TransactionType, BackupConfig } from './types';
+import { loadData, processRecurringTransactions, exportDataToJSON, resetAppData, processCSVImport, createNewBook } from './services/storageService';
+import { initializeFirebase, subscribeToWallet, saveWalletToCloud, checkWalletExists } from './services/firestore';
 import { generateInsights } from './services/geminiService';
-import { SyncService } from './services/syncService';
 import Dashboard from './components/Dashboard';
 import Settings from './components/Settings';
 import AddTransactionModal from './components/AddTransactionModal';
 import AccountsView from './components/AccountsView';
 import CategoriesView from './components/CategoriesView';
 import HistoryView from './components/HistoryView';
-import { LayoutDashboard, List, Settings as SettingsIcon, Plus, Wallet, PieChart } from 'lucide-react';
-import { ICON_MAP } from './constants';
+import { LayoutDashboard, List, Settings as SettingsIcon, Wallet, PieChart, Cloud, LogIn, ArrowRight, Loader2 } from 'lucide-react';
+
+// Setup Screen Component
+const SetupScreen: React.FC<{ onComplete: (walletId: string) => void }> = ({ onComplete }) => {
+    const [step, setStep] = useState<1 | 2>(1);
+    const [configJson, setConfigJson] = useState('');
+    const [walletIdInput, setWalletIdInput] = useState('');
+    const [isChecking, setIsChecking] = useState(false);
+    const [error, setError] = useState('');
+
+    useEffect(() => {
+        // Check if config exists in local storage
+        const savedConfig = localStorage.getItem('firebase_config');
+        if (savedConfig) {
+            setConfigJson(savedConfig);
+            // Attempt auto-connect
+            try {
+                const config = JSON.parse(savedConfig);
+                initializeFirebase(config).then(success => {
+                    if (success) {
+                        setStep(2);
+                    }
+                });
+            } catch(e) {
+                // Invalid config in storage, let user fix it
+            }
+        }
+    }, []);
+
+    const handleConfigSubmit = async () => {
+        try {
+            const config = JSON.parse(configJson);
+            const success = await initializeFirebase(config);
+            if (success) {
+                localStorage.setItem('firebase_config', configJson);
+                setStep(2);
+                setError('');
+            } else {
+                setError('Could not connect to Firebase. Check config.');
+            }
+        } catch (e) {
+            setError('Invalid JSON format.');
+        }
+    };
+
+    const handleJoinWallet = async () => {
+        if (!walletIdInput) return;
+        setIsChecking(true);
+        // In a real app, we might verify existence, but for offline-first we can just bind to it.
+        // However, checking gives better UX.
+        try {
+            const exists = await checkWalletExists(walletIdInput);
+            // We allow joining even if it doesn't exist (it will be created locally first)
+            // but we can warn the user.
+            localStorage.setItem('wallet_id', walletIdInput);
+            onComplete(walletIdInput);
+        } catch (e) {
+            setError("Connection failed. You can still join, data will sync when online.");
+            localStorage.setItem('wallet_id', walletIdInput);
+            onComplete(walletIdInput);
+        }
+        setIsChecking(false);
+    };
+
+    const handleCreateNew = () => {
+        const newId = crypto.randomUUID().split('-')[0].toUpperCase();
+        localStorage.setItem('wallet_id', newId);
+        onComplete(newId);
+    };
+
+    return (
+        <div className="h-[100dvh] flex flex-col items-center justify-center p-6 bg-gray-50 text-center">
+            <div className="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center text-white mb-6 shadow-xl">
+                <Cloud size={32} />
+            </div>
+            <h1 className="text-2xl font-bold text-gray-800 mb-2">OneWallet Cloud</h1>
+            
+            {step === 1 && (
+                <div className="w-full max-w-sm animate-in fade-in slide-in-from-bottom-4">
+                    <p className="text-sm text-gray-500 mb-6">
+                        To enable real-time sync, paste your Firebase Project Configuration object below.
+                    </p>
+                    <textarea 
+                        value={configJson}
+                        onChange={e => setConfigJson(e.target.value)}
+                        placeholder='{"apiKey": "...", "projectId": "..."}'
+                        className="w-full h-32 p-3 border rounded-xl text-xs font-mono mb-4 focus:ring-2 focus:ring-blue-500 outline-none"
+                    />
+                    {error && <div className="text-red-500 text-xs mb-4">{error}</div>}
+                    <button 
+                        onClick={handleConfigSubmit}
+                        disabled={!configJson}
+                        className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold disabled:opacity-50"
+                    >
+                        Connect Firebase
+                    </button>
+                    <div className="mt-4 text-[10px] text-gray-400">
+                        Don't have one? Create a project at console.firebase.google.com
+                    </div>
+                </div>
+            )}
+
+            {step === 2 && (
+                <div className="w-full max-w-sm animate-in fade-in slide-in-from-bottom-4">
+                    <p className="text-sm text-gray-500 mb-6">
+                        Join a shared wallet or create a new one to start tracking.
+                    </p>
+                    
+                    <div className="bg-white p-4 rounded-xl shadow-sm border mb-4">
+                        <label className="text-xs font-bold text-gray-400 uppercase block mb-2 text-left">Join Existing</label>
+                        <div className="flex gap-2">
+                            <input 
+                                type="text" 
+                                value={walletIdInput}
+                                onChange={e => setWalletIdInput(e.target.value.toUpperCase())}
+                                placeholder="ENTER ID"
+                                className="flex-1 p-2 bg-gray-50 border rounded-lg text-center font-bold tracking-widest uppercase"
+                            />
+                            <button 
+                                onClick={handleJoinWallet}
+                                disabled={isChecking || !walletIdInput}
+                                className="bg-blue-600 text-white px-4 rounded-lg flex items-center justify-center disabled:opacity-50"
+                            >
+                                {isChecking ? <Loader2 size={18} className="animate-spin"/> : <ArrowRight size={18}/>}
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="relative flex py-2 items-center">
+                        <div className="flex-grow border-t border-gray-200"></div>
+                        <span className="flex-shrink-0 mx-4 text-gray-300 text-xs font-bold">OR</span>
+                        <div className="flex-grow border-t border-gray-200"></div>
+                    </div>
+
+                    <button 
+                        onClick={handleCreateNew}
+                        className="w-full py-3 bg-white border-2 border-dashed border-gray-300 text-gray-500 font-bold rounded-xl mt-4 hover:bg-gray-50 hover:border-gray-400 transition-all"
+                    >
+                        Create New Wallet
+                    </button>
+                </div>
+            )}
+        </div>
+    )
+}
 
 const App: React.FC = () => {
   const [globalData, setGlobalData] = useState<GlobalData | null>(null);
+  const [walletId, setWalletId] = useState<string | null>(null);
+  const [isSetupComplete, setIsSetupComplete] = useState(false);
+  
   const [currentTab, setCurrentTab] = useState<'dashboard' | 'accounts' | 'transactions' | 'settings' | 'categories'>('dashboard');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [geminiInsight, setGeminiInsight] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [editingTx, setEditingTx] = useState<Transaction | null>(null);
-  const [syncStatus, setSyncStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
   const [installPrompt, setInstallPrompt] = useState<any>(null);
   
   // State for opening modal with specific defaults
   const [modalDefaults, setModalDefaults] = useState<{ type: TransactionType, categoryId?: string } | undefined>(undefined);
   const [modalViewMode, setModalViewMode] = useState<'calculator' | 'categories' | 'create-category'>('calculator');
 
-  const syncServiceRef = useRef<SyncService | null>(null);
-
-  // Initial Load
+  // Initialization Check
   useEffect(() => {
-    let loaded = loadData();
-    loaded = processRecurringTransactions(loaded);
-    setGlobalData(loaded);
+      const savedConfig = localStorage.getItem('firebase_config');
+      const savedWalletId = localStorage.getItem('wallet_id');
 
-    // Listen for PWA install prompt
-    const handler = (e: any) => {
-      e.preventDefault();
-      setInstallPrompt(e);
-    };
-    window.addEventListener('beforeinstallprompt', handler);
-    return () => window.removeEventListener('beforeinstallprompt', handler);
+      if (savedConfig && savedWalletId) {
+          initializeFirebase(JSON.parse(savedConfig)).then(success => {
+              if (success) {
+                  setWalletId(savedWalletId);
+                  setIsSetupComplete(true);
+              }
+          });
+      }
+      
+      // PWA Prompt
+      const handler = (e: any) => {
+        e.preventDefault();
+        setInstallPrompt(e);
+      };
+      window.addEventListener('beforeinstallprompt', handler);
+      return () => window.removeEventListener('beforeinstallprompt', handler);
   }, []);
 
-  // Backup Checker
+  // Sync Logic
   useEffect(() => {
-    if (!globalData || !globalData.backupConfig || !globalData.backupConfig.enabled) return;
-    
-    const checkBackup = () => {
-        const last = globalData.backupConfig?.lastBackupDate ? new Date(globalData.backupConfig.lastBackupDate).getTime() : 0;
-        const now = Date.now();
-        const freq = globalData.backupConfig?.frequency || 'daily';
-        
-        let threshold = 24 * 60 * 60 * 1000; // Daily
-        if (freq === 'weekly') threshold *= 7;
-        if (freq === 'monthly') threshold *= 30;
+      if (!isSetupComplete || !walletId) return;
 
-        if (now - last > threshold) {
-            if (confirm(`Scheduled Backup Due (${freq}).\nProvider: ${globalData.backupConfig.provider?.replace('_', ' ').toUpperCase()}\n\nDownload backup now?`)) {
-                exportDataToJSON(globalData);
-                // Update last backup date
-                setGlobalData(prev => {
-                    if (!prev) return null;
-                    return {
-                        ...prev,
-                        backupConfig: {
-                            ...prev.backupConfig!,
-                            lastBackupDate: new Date().toISOString()
-                        }
-                    }
-                })
-            }
-        }
-    };
-    
-    // Check after a short delay to allow UI to settle
-    const timeout = setTimeout(checkBackup, 2000);
-    return () => clearTimeout(timeout);
-  }, [globalData?.backupConfig]);
+      const unsubscribe = subscribeToWallet(walletId, (newData) => {
+          let processed = processRecurringTransactions(newData);
+          setGlobalData(processed);
+      });
 
-  // Sync Initialization
-  useEffect(() => {
-    if (globalData?.syncConfig?.enabled) {
-        if (!syncServiceRef.current) {
-            startSyncService(globalData.syncConfig);
-        }
-    } else {
-        if (syncServiceRef.current) {
-            syncServiceRef.current.destroy();
-            syncServiceRef.current = null;
-            setSyncStatus('disconnected');
-        }
-    }
-  }, [globalData?.syncConfig]);
-
-  const startSyncService = (config: SyncConfig) => {
-      syncServiceRef.current = new SyncService(
-          config.familyName,
-          config.slot,
-          (incomingData) => {
-            // MERGE LOGIC
-            setGlobalData(currentData => {
-                if (!currentData) return incomingData;
-                
-                // Merge Books
-                const mergedBooks = currentData.books.map(localBook => {
-                    const remoteBook = incomingData.books.find(b => b.id === localBook.id);
-                    if (!remoteBook) return localBook;
-
-                    // Merge Transactions (Union by ID, prefer recent)
-                    const allTx = [...localBook.transactions];
-                    remoteBook.transactions.forEach(remoteTx => {
-                        const localTxIndex = allTx.findIndex(t => t.id === remoteTx.id);
-                        if (localTxIndex === -1) {
-                            allTx.push(remoteTx);
-                        } else {
-                            // Conflict: Check updatedAt
-                            const localTx = allTx[localTxIndex];
-                            const localTime = new Date(localTx.updatedAt || 0).getTime();
-                            const remoteTime = new Date(remoteTx.updatedAt || 0).getTime();
-                            if (remoteTime > localTime) {
-                                allTx[localTxIndex] = remoteTx;
-                            }
-                        }
-                    });
-
-                    return { ...localBook, transactions: allTx };
-                });
-                
-                // Add new books from remote
-                incomingData.books.forEach(remoteBook => {
-                    if (!mergedBooks.find(b => b.id === remoteBook.id)) {
-                        mergedBooks.push(remoteBook);
-                    }
-                });
-                
-                // Merge Users
-                const mergedUsers = [...currentData.users];
-                incomingData.users.forEach(remoteUser => {
-                    if (!mergedUsers.find(u => u.id === remoteUser.id)) {
-                        mergedUsers.push(remoteUser);
-                    }
-                });
-
-                return {
-                    ...currentData,
-                    books: mergedBooks,
-                    users: mergedUsers
-                };
-            });
-        },
-        (status) => setSyncStatus(status)
-      );
-      syncServiceRef.current.initialize();
-  };
-
-  // Persistence & Broadcast
-  useEffect(() => {
-    if (globalData) {
-      saveData(globalData);
-      // Broadcast changes to peers
-      if (syncServiceRef.current) {
-          syncServiceRef.current.broadcast(globalData);
+      // Initial local load to speed up UI while connecting
+      const local = loadData();
+      if (!globalData && local) {
+          // Check if we have pending changes to push? 
+          // For simplicity in this transition, we trust Firestore as truth if it exists,
+          // OR if Firestore is empty, we push local data.
+          checkWalletExists(walletId).then(exists => {
+              if (!exists) {
+                  console.log("New wallet detected, pushing local data...");
+                  saveWalletToCloud(walletId, local);
+                  setGlobalData(local);
+              }
+          });
       }
+
+      return () => unsubscribe();
+  }, [isSetupComplete, walletId]);
+
+  // Persist changes to Cloud
+  useEffect(() => {
+    if (globalData && isSetupComplete && walletId) {
+       saveWalletToCloud(walletId, globalData);
     }
-  }, [globalData]);
+  }, [globalData, isSetupComplete, walletId]);
+
 
   // Derived state
   const activeBook = globalData?.books.find(b => b.id === globalData.activeBookId);
   const currentUser = globalData?.users.find(u => u.isCurrentUser) || globalData?.users[0];
+
+  const handleSetupComplete = (id: string) => {
+      setWalletId(id);
+      setIsSetupComplete(true);
+      
+      // If we have local data but just joined a NEW ID, we should push it.
+      const local = loadData();
+      saveWalletToCloud(id, local);
+  };
 
   const handleAddTransaction = (tx: Partial<Transaction>, recurrence?: RecurringFrequency, toBookId?: string, convertedAmount?: number) => {
     if (!globalData || !activeBook) return;
@@ -219,7 +291,6 @@ const App: React.FC = () => {
               
               if (recurrence && tx.amount) {
                    const nextDate = new Date(newTx.date);
-                   // ... (Logic preserved from previous)
                    // Just pushing rule
                    updatedRecurring.push({
                       id: crypto.randomUUID(),
@@ -267,17 +338,20 @@ const App: React.FC = () => {
   };
 
   const handleDeleteTransaction = (txId: string) => {
-      if (!globalData || !activeBook) return;
-      const updatedBooks = globalData.books.map(b => {
-          if (b.id === activeBook.id) {
-              return {
-                  ...b,
-                  transactions: b.transactions.filter(t => t.id !== txId)
-              };
-          }
-          return b;
+      setGlobalData(prevData => {
+          if (!prevData) return null;
+          const activeBookId = prevData.activeBookId;
+          const updatedBooks = prevData.books.map(b => {
+              if (b.id === activeBookId) {
+                  return {
+                      ...b,
+                      transactions: b.transactions.filter(t => t.id !== txId)
+                  };
+              }
+              return b;
+          });
+          return { ...prevData, books: updatedBooks };
       });
-      setGlobalData({ ...globalData, books: updatedBooks });
   };
 
   const handleAddCategory = (newCat: Category) => {
@@ -367,15 +441,27 @@ const App: React.FC = () => {
           books: globalData.books.map(b => b.id === activeBook.id ? updatedBook : b)
       });
   };
+  
+  const handleCSVImport = (csvText: string) => {
+    if (!globalData) return;
+    try {
+        const { data: updatedData, count } = processCSVImport(csvText, globalData);
+        setGlobalData(updatedData);
+        alert(`Successfully imported ${count} transactions.`);
+    } catch (e: any) {
+        alert("Import Failed: " + e.message);
+    }
+  };
 
   const handleImportGlobal = (newData: GlobalData) => {
     setGlobalData(newData);
-    window.location.reload(); 
+    // When importing full JSON, we immediately push to cloud
+    if (walletId) saveWalletToCloud(walletId, newData);
   };
 
   const handleAddBook = (name: string, currency: string) => {
     if (!globalData) return;
-    const newBook = createNewBook(name, currency);
+    const newBook = createNewBook(name, currency); // Removed unused variable
     setGlobalData({
       ...globalData,
       books: [...globalData.books, newBook],
@@ -411,12 +497,6 @@ const App: React.FC = () => {
     setGeminiInsight(''); 
   };
   
-  // New Sync Config Handler
-  const handleConfigureSync = (config: SyncConfig) => {
-      if (!globalData) return;
-      setGlobalData({ ...globalData, syncConfig: config });
-  };
-
   const handleConfigureBackup = (config: BackupConfig) => {
       if (!globalData) return;
       setGlobalData({ ...globalData, backupConfig: config });
@@ -430,28 +510,21 @@ const App: React.FC = () => {
       setGlobalData({ ...globalData, users: updatedUsers });
   };
 
-  // --- DATA CLEARING LOGIC ---
   const handleFactoryReset = () => {
-    if (resetAppData()) {
-        alert("Success: App has been reset to factory settings.");
-        window.location.reload();
-    } else {
-        alert("Failed to reset app data.");
-    }
+    resetAppData();
+    localStorage.removeItem('firebase_config');
+    localStorage.removeItem('wallet_id');
+    window.location.reload();
   };
 
   const handleClearData = () => {
-     // Uses clearIncomeExpenseTransactions instead of clearAll to satisfy specific request
-     // or utilizes clearAll logic if desired.
-     // Prompt asked for "expense and income transaction only".
-     const success = clearIncomeExpenseTransactions();
+     if (!globalData) return;
      
-     if (success) {
-         alert("Success! Expense and Income transactions cleared.");
-         window.location.reload();
-     } else {
-         alert("Failed to clear data.");
-     }
+     const updatedBooks = globalData.books.map(b => ({
+         ...b,
+         transactions: b.transactions.filter(t => t.type === 'transfer')
+     }));
+     setGlobalData({ ...globalData, books: updatedBooks });
   };
 
   const handleGenerateInsight = async () => {
@@ -462,7 +535,6 @@ const App: React.FC = () => {
     setIsAnalyzing(false);
   };
   
-  // Handler to open modal for specific category click
   const handleSelectCategory = (categoryId: string, type: TransactionType) => {
       setModalDefaults({ type, categoryId });
       setModalViewMode('calculator');
@@ -482,7 +554,7 @@ const App: React.FC = () => {
       setModalViewMode('calculator');
       setEditingTx(null);
       setIsAddModalOpen(true);
-  }
+  };
 
   const handleEditTransaction = (tx: Transaction) => {
       setEditingTx(tx);
@@ -490,6 +562,15 @@ const App: React.FC = () => {
       setModalViewMode('calculator');
       setIsAddModalOpen(true);
   };
+
+  const handleLogout = () => {
+      localStorage.removeItem('wallet_id');
+      window.location.reload();
+  }
+
+  if (!isSetupComplete) {
+      return <SetupScreen onComplete={handleSetupComplete} />;
+  }
 
   if (!globalData || !activeBook) return <div className="h-[100dvh] flex items-center justify-center text-gray-400">Loading OneWallet...</div>;
 
@@ -540,6 +621,7 @@ const App: React.FC = () => {
           data={globalData} 
           activeBook={activeBook}
           onImport={handleImportGlobal} 
+          onImportCSV={handleCSVImport}
           onImportTransactions={handleImportTransactions}
           onBulkImport={handleBulkImport}
           onReset={handleFactoryReset}
@@ -550,10 +632,10 @@ const App: React.FC = () => {
           onDeleteBook={handleDeleteBook}
           onAddCategory={handleAddCategory}
           onUpdateUser={handleUpdateUser}
-          onConfigureSync={handleConfigureSync}
           onConfigureBackup={handleConfigureBackup}
-          syncStatus={syncStatus}
           installPrompt={installPrompt}
+          walletId={walletId}
+          onLogout={handleLogout}
         />
       )}
 

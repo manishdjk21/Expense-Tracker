@@ -70,12 +70,6 @@ export interface Book {
   color?: string; // Wallet Theme Color
 }
 
-export interface SyncConfig {
-  familyName: string;
-  slot: 1 | 2;
-  enabled: boolean;
-}
-
 export interface BackupConfig {
     enabled: boolean;
     frequency: 'daily' | 'weekly' | 'monthly';
@@ -88,7 +82,6 @@ export interface GlobalData {
   activeBookId: string;
   users: UserProfile[];
   deviceId: string; // Kept for legacy/fallback
-  syncConfig?: SyncConfig;
   backupConfig?: BackupConfig;
 }
 
