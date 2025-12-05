@@ -2,7 +2,7 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { GlobalData, Book, Category, SyncConfig, BackupConfig, Transaction } from '../types';
 import { exportDataToJSON, exportTransactionsToCSV, parseCSV, mergeCSVData } from '../services/storageService';
-import { Download, Upload, FileText, Trash2, Wallet, Plus, Check, ChevronRight, ChevronDown, Edit2, X, Save, RefreshCw, Circle, Smartphone, QrCode, Loader2, Cloud, HardDrive, Calendar, AlertTriangle } from 'lucide-react';
+import { Download, Upload, FileText, Trash2, Wallet, Plus, Check, ChevronRight, ChevronDown, Edit2, X, Save, RefreshCw, Circle, Smartphone, Loader2, Cloud, HardDrive } from 'lucide-react';
 import { ICON_MAP, ICON_KEYS, AVAILABLE_COLORS } from '../constants';
 
 interface Props {
@@ -229,25 +229,7 @@ const Settings: React.FC<Props> = ({
     });
   };
 
-  // Improved handlers with stopPropagation to ensure clicks register
-  const confirmFactoryReset = (e: React.MouseEvent) => {
-      e.stopPropagation();
-      e.preventDefault();
-      if (window.confirm("FACTORY RESET WARNING\n\nThis will permanently delete ALL data including your wallets, categories, and history.\n\nAre you absolutely sure?")) {
-            onReset();
-      }
-  };
-
-  const confirmClearTransactions = (e: React.MouseEvent) => {
-      e.stopPropagation();
-      e.preventDefault();
-      if (window.confirm("WARNING: You are about to delete ALL transaction history.\n\n• Expenses & Income records will be deleted.\n• Account balances will revert to their initial state.\n• Categories and Wallets will be SAVED.\n\nAre you sure you want to proceed?")) {
-          onClearData();
-      }
-  };
-
   const mainCategories = activeBook.categories.filter(c => !c.parentId);
-  const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
 
   return (
     <div className="flex-1 overflow-y-auto pb-24 p-4 no-scrollbar relative">
@@ -269,28 +251,6 @@ const Settings: React.FC<Props> = ({
             </button>
         </section>
       )}
-
-      {/* QR Code Share Section */}
-      <section className="bg-white rounded-2xl p-6 shadow-sm mb-6">
-         <div className="flex items-center gap-2 mb-4">
-            <QrCode size={18} className="text-blue-600"/>
-            <h3 className="text-sm font-bold text-gray-800 uppercase tracking-wide">Share / Open on Phone</h3>
-         </div>
-         <div className="flex flex-col items-center bg-gray-50 p-4 rounded-xl border border-gray-100">
-             <img 
-                src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(currentUrl)}`} 
-                alt="QR Code" 
-                className="w-40 h-40 rounded-lg mb-2 mix-blend-multiply"
-             />
-             <p className="text-xs text-gray-500 text-center mb-2 leading-relaxed">
-                 Scan with your camera to open this app on another device.
-                 <br/><span className="text-[10px] text-gray-400">(If using localhost, ensure devices are on same WiFi)</span>
-             </p>
-             <div className="flex items-center gap-2 bg-white px-2 py-1 rounded border max-w-full">
-                 <span className="text-[10px] text-gray-400 font-mono truncate max-w-[200px]">{currentUrl}</span>
-             </div>
-         </div>
-      </section>
 
       {/* User Account Section */}
       <section className="bg-white rounded-2xl p-6 shadow-sm mb-6">
@@ -741,36 +701,6 @@ const Settings: React.FC<Props> = ({
           </span>
         </button>
         <input type="file" accept=".csv" ref={csvInputRef} onChange={handleCsvUpload} className="hidden" />
-      </section>
-
-      {/* Danger Zone */}
-      <section className="bg-red-50 rounded-2xl p-6 shadow-sm mb-6 border border-red-100">
-           <div className="flex items-center gap-2 mb-4">
-               <AlertTriangle size={18} className="text-red-500"/>
-               <h3 className="text-sm font-bold text-red-600 uppercase tracking-wide">Danger Zone</h3>
-           </div>
-           
-           <div className="space-y-3">
-               <button 
-                    type="button"
-                    onClick={confirmClearTransactions}
-                    className="w-full flex items-center justify-center gap-2 p-3 bg-white text-orange-600 border border-orange-200 rounded-xl hover:bg-orange-50 transition-colors text-xs font-bold"
-               >
-                    <Trash2 size={16} /> Clear Transactions Only
-               </button>
-               
-               <button 
-                    type="button"
-                    onClick={confirmFactoryReset}
-                    className="w-full flex items-center justify-center gap-2 p-3 bg-red-600 text-white rounded-xl hover:bg-red-700 transition-colors text-xs font-bold shadow-sm"
-               >
-                    <Trash2 size={16} /> Factory Reset (Wipe All)
-               </button>
-           </div>
-           <p className="text-[10px] text-red-400 mt-3 text-center leading-relaxed">
-               "Clear Transactions" keeps your categories and accounts.<br/>
-               "Factory Reset" restores the app to fresh install state.
-           </p>
       </section>
 
       <div className="text-center pt-2 text-[10px] text-gray-300">
