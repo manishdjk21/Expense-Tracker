@@ -106,7 +106,13 @@ const CategoriesView: React.FC<Props> = ({ book, books, onSwitchBook, onSelectCa
         if (t.type === 'expense') tExp += t.amount;
         
         if (t.type === viewType && t.categoryId) {
-          catTotals[t.categoryId] = (catTotals[t.categoryId] || 0) + t.amount;
+          // Find the category to check if it has a parent
+          const cat = book.categories.find(c => c.id === t.categoryId);
+          if (cat) {
+              // If it's a subcategory, attribute amount to parent, otherwise to itself
+              const targetId = cat.parentId || cat.id;
+              catTotals[targetId] = (catTotals[targetId] || 0) + t.amount;
+          }
         }
       }
     });

@@ -1,5 +1,7 @@
 {
   "name": "OneWallet",
   "description": "A smart, mobile-first expense manager inspired by 1Money. Features offline tracking, file-based sync, CSV import, and Gemini-powered financial insights.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [
+    "camera"
+  ]
 }

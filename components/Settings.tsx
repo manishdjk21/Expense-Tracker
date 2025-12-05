@@ -2,7 +2,7 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { GlobalData, Book, Category, SyncConfig, BackupConfig, Transaction } from '../types';
 import { exportDataToJSON, exportTransactionsToCSV } from '../services/storageService';
-import { Download, Upload, FileText, Trash2, Wallet, Plus, Check, ChevronRight, ChevronDown, Edit2, X, Save, RefreshCw, Circle, Smartphone, Cloud, HardDrive } from 'lucide-react';
+import { Download, Upload, FileText, Trash2, Wallet, Plus, Check, ChevronRight, ChevronDown, Edit2, X, Save, RefreshCw, Circle, Smartphone, Cloud, HardDrive, AlertTriangle } from 'lucide-react';
 import { ICON_MAP, ICON_KEYS, AVAILABLE_COLORS } from '../constants';
 
 interface Props {
@@ -201,6 +201,18 @@ const Settings: React.FC<Props> = ({
     });
   };
 
+  const confirmClearTransactions = () => {
+      if (window.confirm("WARNING: Are you sure you want to delete ALL expense and income transactions? This action cannot be undone.")) {
+          onClearData();
+      }
+  };
+
+  const confirmFactoryReset = () => {
+      if (window.confirm("CRITICAL WARNING: This will delete ALL data (Wallets, Categories, Transactions) and reset the app to its initial install state. This action cannot be undone. Are you sure?")) {
+          onReset();
+      }
+  };
+
   const mainCategories = activeBook.categories.filter(c => !c.parentId);
 
   return (
@@ -359,6 +371,31 @@ const Settings: React.FC<Props> = ({
                 <input type="file" accept=".json" ref={jsonInputRef} onChange={handleJsonUpload} className="hidden" />
              </div>
         </div>
+      </section>
+
+      {/* Danger Zone */}
+      <section className="bg-red-50 rounded-2xl p-6 shadow-sm mb-6 border border-red-100">
+         <div className="flex items-center gap-2 mb-4">
+             <AlertTriangle size={18} className="text-red-500"/>
+             <h3 className="text-sm font-bold text-red-600">Danger Zone</h3>
+         </div>
+         <div className="space-y-3">
+             <button 
+                 onClick={confirmClearTransactions}
+                 className="w-full py-3 bg-white border border-red-200 text-red-600 rounded-xl flex items-center justify-center gap-2 text-xs font-bold hover:bg-red-50 transition-colors"
+             >
+                 <Trash2 size={16}/> Clear Transactions Only
+             </button>
+             <button 
+                 onClick={confirmFactoryReset}
+                 className="w-full py-3 bg-red-600 text-white rounded-xl flex items-center justify-center gap-2 text-xs font-bold hover:bg-red-700 transition-colors shadow-sm"
+             >
+                 <RefreshCw size={16}/> Factory Reset App
+             </button>
+         </div>
+         <p className="text-[10px] text-red-400 mt-3 text-center leading-relaxed">
+             * Clearing transactions removes expense and income history. Factory reset deletes EVERYTHING including categories and wallets.
+         </p>
       </section>
 
       {/* Simplified Family Sync Section */}

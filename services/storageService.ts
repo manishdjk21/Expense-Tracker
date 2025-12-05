@@ -52,12 +52,10 @@ export const resetAppData = () => {
         localStorage.removeItem(STORAGE_KEY);
         // Then clear everything to be safe
         localStorage.clear();
-        
-        // Force Reload
-        window.location.href = window.location.href;
+        return true;
     } catch (e) {
         console.error("Failed to reset data", e);
-        alert("Failed to clear data completely. Please clear browser cache manually.");
+        return false;
     }
 };
 
@@ -75,6 +73,27 @@ export const clearAllTransactions = (): boolean => {
         }));
         
         // Save immediately to disk, bypassing React state
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+        return true;
+    } catch (e) {
+        console.error("Failed to clear transactions", e);
+        return false;
+    }
+};
+
+export const clearIncomeExpenseTransactions = (): boolean => {
+    try {
+        const dataStr = localStorage.getItem(STORAGE_KEY);
+        if (!dataStr) return false;
+        
+        const data: GlobalData = JSON.parse(dataStr);
+        
+        // Keep only transfers
+        data.books = data.books.map(b => ({
+            ...b,
+            transactions: b.transactions.filter(t => t.type === 'transfer')
+        }));
+        
         localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
         return true;
     } catch (e) {
@@ -275,273 +294,4 @@ export const exportTransactionsToCSV = (book: Book, allBooks: Book[] = []) => {
   link.click();
   document.body.removeChild(link);
   URL.revokeObjectURL(href);
-};
-
-// Intermediate structure for parsed rows
-export interface ParsedCSVRow {
-    date: Date;
-    amount: number;
-    type: TransactionType;
-    category: string;
-    subcategory: string;
-    wallet: string;
-    account: string;
-    toAccount: string;
-    currency: string;
-    note: string;
-    tags: string[];
-}
-
-export const parseCSV = async (file: File): Promise<ParsedCSVRow[]> => {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const text = e.target?.result as string;
-      if (!text) { resolve([]); return; }
-
-      try {
-        const lines = text.split(/\r?\n/);
-        const rows: ParsedCSVRow[] = [];
-        
-        // Auto-detect delimiter
-        const sampleLine = lines.find(l => l.trim().length > 0) || '';
-        const semiCount = (sampleLine.match(/;/g) || []).length;
-        const commaCount = (sampleLine.match(/,/g) || []).length;
-        const delimiter = semiCount > commaCount ? ';' : ',';
-
-        const parseLine = (text: string) => {
-            const result = [];
-            let curr = '';
-            let inQuote = false;
-            for (let i = 0; i < text.length; i++) {
-                const char = text[i];
-                if (char === '"') {
-                    inQuote = !inQuote;
-                } else if (char === delimiter && !inQuote) {
-                    result.push(curr.trim().replace(/^"|"$/g, ''));
-                    curr = '';
-                } else {
-                    curr += char;
-                }
-            }
-            result.push(curr.trim().replace(/^"|"$/g, ''));
-            return result;
-        };
-
-        // Header Detection & Mapping
-        let map = {
-            wallet: -1,
-            date: 0,
-            category: 1,
-            amount: 2,
-            currency: -1,
-            note: 3,
-            type: 4,
-            subcategory: -1, 
-            account: -1,
-            toAccount: -1,
-            tags: 6
-        };
-        
-        let startIndex = 0;
-
-        if (lines.length > 0) {
-            const headerRow = parseLine(lines[0].toLowerCase().trim());
-            const hasDate = headerRow.some(h => h.includes('date'));
-            
-            if (hasDate) {
-                startIndex = 1;
-                map.wallet = headerRow.findIndex(h => h.includes('wallet') || h.includes('book'));
-                map.date = headerRow.findIndex(h => h.includes('date'));
-                map.amount = headerRow.findIndex(h => (h.includes('amount') || h.includes('value')) && !h.includes('target'));
-                map.currency = headerRow.findIndex(h => h.includes('currency') && !h.includes('target'));
-                map.category = headerRow.findIndex(h => h.includes('category') && !h.includes('sub'));
-                map.subcategory = headerRow.findIndex(h => h.includes('subcategory'));
-                map.account = headerRow.findIndex(h => h.includes('account') && !h.includes('to'));
-                map.toAccount = headerRow.findIndex(h => h.includes('to account'));
-                map.type = headerRow.findIndex(h => h.includes('type'));
-                map.note = headerRow.findIndex(h => h.includes('note') || h.includes('description'));
-                map.tags = headerRow.findIndex(h => h.includes('tag'));
-            }
-        }
-        
-        for (let i = startIndex; i < lines.length; i++) {
-          const line = lines[i].trim();
-          if (!line) continue;
-          
-          const parts = parseLine(line);
-          if (parts.length < 2) continue; 
-
-          const dateStr = map.date > -1 ? parts[map.date] : '';
-          const amountStr = map.amount > -1 ? parts[map.amount] : '';
-          if (!amountStr || !dateStr) continue;
-
-          const amount = parseFloat(amountStr.replace(/[^0-9.-]/g, ''));
-          if (isNaN(amount)) continue;
-
-          // Smart Date Parsing
-          let date = new Date(dateStr);
-          if (isNaN(date.getTime())) {
-              const dParts = dateStr.match(/(\d+)[/-](\d+)[/-](\d+)/);
-              if (dParts) {
-                  date = new Date(`${dParts[3]}-${dParts[2]}-${dParts[1]}`);
-              }
-          }
-          if (isNaN(date.getTime())) continue; 
-
-          let catName = map.category > -1 ? parts[map.category] : 'Uncategorized';
-          let subCatName = map.subcategory > -1 ? parts[map.subcategory] : '';
-          
-          // Handle "Category: Subcategory" format
-          if (!subCatName && catName.includes(':')) {
-              const split = catName.split(':');
-              catName = split[0].trim();
-              subCatName = split[1].trim();
-          } else if (!subCatName && catName.includes(' - ')) {
-              const split = catName.split(' - ');
-              catName = split[0].trim();
-              subCatName = split[1].trim();
-          }
-
-          const typeStr = map.type > -1 ? parts[map.type]?.toLowerCase() : 'expense';
-          const txType: TransactionType = typeStr.includes('income') ? 'income' : typeStr.includes('transfer') ? 'transfer' : 'expense';
-          const wallet = map.wallet > -1 ? parts[map.wallet] : '';
-          const account = map.account > -1 ? parts[map.account] : '';
-          const toAccount = map.toAccount > -1 ? parts[map.toAccount] : '';
-          const currency = map.currency > -1 ? parts[map.currency] : '';
-          const note = map.note > -1 ? parts[map.note] : '';
-          const tags = map.tags > -1 ? parts[map.tags].split(/[;,]/).map(t => t.trim()).filter(Boolean) : [];
-
-          rows.push({
-              date,
-              amount: Math.abs(amount),
-              type: txType,
-              category: catName,
-              subcategory: subCatName,
-              wallet: wallet,
-              account: account,
-              toAccount: toAccount,
-              currency: currency,
-              note,
-              tags
-          });
-        }
-        resolve(rows);
-      } catch (err) {
-        reject(err);
-      }
-    };
-    reader.onerror = (e) => reject(new Error("File reading failed"));
-    reader.readAsText(file);
-  });
-};
-
-export const mergeCSVData = (currentData: GlobalData, rows: ParsedCSVRow[], defaultBookId: string): { data: GlobalData, stats: string } => {
-    // Deep clone to avoid direct mutation issues during loop
-    const newData = JSON.parse(JSON.stringify(currentData));
-    const stats = {
-        walletsCreated: 0,
-        txCreated: 0,
-        catsCreated: 0
-    };
-
-    const activeBookName = newData.books.find((b: Book) => b.id === defaultBookId)?.name || "My Wallet";
-    
-    // Helpers
-    const getOrCreateBook = (name: string, currency: string) => {
-        let book = newData.books.find((b: Book) => b.name.toLowerCase() === name.toLowerCase());
-        if (!book) {
-            book = createNewBook(name, currency || DEFAULT_CURRENCY);
-            newData.books.push(book);
-            stats.walletsCreated++;
-        }
-        return book;
-    };
-
-    const getOrCreateAccount = (book: Book, accName: string) => {
-        const normalizedName = accName || "Cash"; // Default to Cash if missing
-        let acc = book.accounts.find((a: Account) => a.name.toLowerCase() === normalizedName.toLowerCase());
-        if (!acc) {
-            acc = {
-                id: crypto.randomUUID(),
-                name: normalizedName,
-                type: 'cash',
-                initialBalance: 0,
-                color: AVAILABLE_COLORS[Math.floor(Math.random() * AVAILABLE_COLORS.length)],
-                icon: 'Wallet'
-            };
-            book.accounts.push(acc);
-        }
-        return acc;
-    };
-
-    const getOrCreateCategory = (book: Book, name: string, subName: string, type: TransactionType) => {
-        // Parent
-        let parent = book.categories.find((c: Category) => c.name.toLowerCase() === name.toLowerCase() && !c.parentId);
-        if (!parent) {
-            parent = {
-                id: crypto.randomUUID(),
-                name: name,
-                type: type === 'transfer' ? 'expense' : type,
-                color: AVAILABLE_COLORS[Math.floor(Math.random() * AVAILABLE_COLORS.length)],
-                icon: ICON_KEYS[Math.floor(Math.random() * ICON_KEYS.length)],
-            };
-            book.categories.push(parent);
-            stats.catsCreated++;
-        }
-
-        // Subcategory
-        if (subName) {
-            let sub = book.categories.find((c: Category) => c.parentId === parent.id && c.name.toLowerCase() === subName.toLowerCase());
-            if (!sub) {
-                sub = {
-                    id: crypto.randomUUID(),
-                    name: subName,
-                    type: parent.type,
-                    parentId: parent.id,
-                    color: parent.color,
-                    icon: parent.icon
-                };
-                book.categories.push(sub);
-                stats.catsCreated++;
-            }
-            return sub;
-        }
-
-        return parent;
-    };
-
-    rows.forEach(row => {
-        const targetWalletName = row.wallet || activeBookName;
-        const book = getOrCreateBook(targetWalletName, row.currency);
-        const account = getOrCreateAccount(book, row.account);
-        
-        let toAccountId = undefined;
-        if (row.type === 'transfer' && row.toAccount) {
-            const toAcc = getOrCreateAccount(book, row.toAccount);
-            toAccountId = toAcc.id;
-        }
-
-        const category = getOrCreateCategory(book, row.category, row.subcategory, row.type);
-
-        const newTx: Transaction = {
-             id: `imp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-             date: row.date.toISOString(),
-             amount: row.amount,
-             type: row.type,
-             accountId: account.id,
-             toAccountId: toAccountId,
-             categoryId: row.type === 'transfer' ? undefined : category.id,
-             note: row.note,
-             tags: row.tags,
-             updatedAt: new Date().toISOString()
-        };
-
-        book.transactions.push(newTx);
-        stats.txCreated++;
-    });
-
-    const summary = `Import Complete!\n\nTransactions created: ${stats.txCreated}\nNew Wallets created: ${stats.walletsCreated}\nNew Categories created: ${stats.catsCreated}`;
-
-    return { data: newData, stats: summary };
 };

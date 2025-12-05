@@ -1,8 +1,9 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { Category, TransactionType, Account, Transaction, RecurringFrequency, Book } from '../types';
-import { X, Check, Delete, RefreshCw, Calendar, Tag, ChevronDown, Repeat, Plus, ShoppingBag, Book as BookIcon, Wallet, Trash2 } from 'lucide-react';
+import { X, Check, Delete, RefreshCw, Calendar, Tag, ChevronDown, Repeat, Plus, ShoppingBag, Book as BookIcon, Wallet, Trash2, Camera, Loader2 } from 'lucide-react';
 import { ICON_MAP, ICON_KEYS, AVAILABLE_COLORS } from '../constants';
+import { parseReceipt } from '../services/geminiService';
 
 interface Props {
   isOpen: boolean;
@@ -29,7 +30,7 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSave, onDelet
   
   // Transfer State
   const [targetBookId, setTargetBookId] = useState<string>(activeBookId);
-  const [targetAccount, setTargetAccount] = useState<string>(''); 
+  const [targetAccount, setTargetAccount] = useState<string>(accounts.length > 1 ? accounts[1].id : accounts[0]?.id || ''); 
   const [receivedAmountStr, setReceivedAmountStr] = useState('0');
   const [activeField, setActiveField] = useState<'source' | 'target'>('source');
 
@@ -46,6 +47,9 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSave, onDelet
   const [newCatColor, setNewCatColor] = useState('#fbbf24');
   const [newCatParent, setNewCatParent] = useState<string | null>(null);
 
+  // Receipt Scanning
+  const [isScanning, setIsScanning] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const dateInputRef = useRef<HTMLInputElement>(null);
 
   // Initialize form state
@@ -126,7 +130,6 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSave, onDelet
     const book = books.find(b => b.id === targetBookId);
     if (book && book.accounts.length > 0) {
         // Check if we need to auto-select (Create mode or manual change)
-        // If editing, we rely on initialData first, but if user changes book, we default.
         const currentTargetAccountValid = book.accounts.some(a => a.id === targetAccount);
 
         if (!currentTargetAccountValid) {
@@ -283,6 +286,37 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSave, onDelet
     resetCreateForm();
   };
 
+  // Receipt Scanning Handler
+  const handleScanReceipt = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      setIsScanning(true);
+      const reader = new FileReader();
+      reader.onload = async (event) => {
+          try {
+              const base64 = (event.target?.result as string).split(',')[1];
+              const result = await parseReceipt(base64, categories, currency);
+              
+              if (result.amount) setAmountStr(result.amount.toString());
+              if (result.date) setDate(result.date);
+              if (result.merchant) setNote(result.merchant);
+              if (result.categoryId) {
+                  const cat = categories.find(c => c.id === result.categoryId);
+                  if (cat) setSelectedCategory(cat.id);
+              }
+              setType('expense');
+          } catch (err) {
+              alert("Could not analyze receipt. Please try again.");
+          } finally {
+              setIsScanning(false);
+          }
+      };
+      reader.readAsDataURL(file);
+      // Reset input value so same file can be selected again
+      e.target.value = '';
+  };
+
   const formattedDate = new Date(date).toLocaleDateString('en-US', {
       weekday: 'long',
       year: 'numeric',
@@ -324,8 +358,16 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSave, onDelet
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="bg-white w-full sm:max-w-md h-[95vh] sm:h-auto sm:max-h-[90vh] sm:rounded-2xl rounded-t-2xl shadow-2xl flex flex-col overflow-hidden">
+      <div className="bg-white w-full sm:max-w-md h-[95vh] sm:h-auto sm:max-h-[90vh] sm:rounded-2xl rounded-t-2xl shadow-2xl flex flex-col overflow-hidden relative">
         
+        {/* Loading Overlay for Scan */}
+        {isScanning && (
+            <div className="absolute inset-0 bg-white/90 z-50 flex flex-col items-center justify-center backdrop-blur-sm">
+                <Loader2 size={48} className="text-blue-600 animate-spin mb-4" />
+                <p className="text-gray-600 font-bold animate-pulse">Analyzing Receipt...</p>
+            </div>
+        )}
+
         {/* Top Header */}
         <div className="flex items-center justify-between p-3 bg-gray-50 z-10 border-b">
           <button onClick={onClose} className="p-2 text-gray-400 hover:bg-gray-200 rounded-full">
@@ -348,7 +390,26 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSave, onDelet
             ))}
           </div>
 
-          <div className="w-10 flex justify-end">
+          <div className="flex items-center gap-1">
+              {!initialData && type === 'expense' && (
+                  <>
+                      <button 
+                          onClick={() => fileInputRef.current?.click()}
+                          className="p-2 text-blue-500 hover:bg-blue-50 rounded-full"
+                          title="Scan Receipt"
+                      >
+                          <Camera size={20} />
+                      </button>
+                      <input 
+                        type="file" 
+                        ref={fileInputRef} 
+                        onChange={handleScanReceipt} 
+                        accept="image/*" 
+                        capture="environment" 
+                        className="hidden" 
+                      />
+                  </>
+              )}
               {initialData && onDelete && (
                   <button onClick={handleDeleteTx} className="p-2 text-red-400 hover:bg-red-50 rounded-full">
                       <Trash2 size={20} />

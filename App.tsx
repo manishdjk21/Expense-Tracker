@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { GlobalData, Transaction, Book, RecurringFrequency, RecurringRule, Category, Account, TransactionType, UserProfile, SyncConfig, BackupConfig } from './types';
-import { loadData, saveData, createNewBook, processRecurringTransactions, exportDataToJSON, createDefaultData, resetAppData, clearAllTransactions } from './services/storageService';
+import { loadData, saveData, createNewBook, processRecurringTransactions, exportDataToJSON, createDefaultData, resetAppData, clearIncomeExpenseTransactions } from './services/storageService';
 import { generateInsights } from './services/geminiService';
 import { SyncService } from './services/syncService';
 import Dashboard from './components/Dashboard';
@@ -430,20 +430,25 @@ const App: React.FC = () => {
       setGlobalData({ ...globalData, users: updatedUsers });
   };
 
-  // --- SPLIT RESET LOGIC ---
+  // --- DATA CLEARING LOGIC ---
   const handleFactoryReset = () => {
-    resetAppData();
+    if (resetAppData()) {
+        alert("Success: App has been reset to factory settings.");
+        window.location.reload();
+    } else {
+        alert("Failed to reset app data.");
+    }
   };
 
   const handleClearData = () => {
-     // Direct storage manipulation to avoid state closure issues
-     const success = clearAllTransactions();
+     // Uses clearIncomeExpenseTransactions instead of clearAll to satisfy specific request
+     // or utilizes clearAll logic if desired.
+     // Prompt asked for "expense and income transaction only".
+     const success = clearIncomeExpenseTransactions();
      
      if (success) {
-         // Blocking alert to ensure user sees feedback
-         alert("Success! All transactions have been cleared.");
-         // Force hard reload
-         window.location.href = window.location.href;
+         alert("Success! Expense and Income transactions cleared.");
+         window.location.reload();
      } else {
          alert("Failed to clear data.");
      }
