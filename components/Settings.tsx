@@ -1,8 +1,8 @@
 
 import React, { useRef, useState, useEffect } from 'react';
 import { GlobalData, Book, Category, SyncConfig, BackupConfig, Transaction } from '../types';
-import { exportDataToJSON, exportTransactionsToCSV, parseCSV, mergeCSVData } from '../services/storageService';
-import { Download, Upload, FileText, Trash2, Wallet, Plus, Check, ChevronRight, ChevronDown, Edit2, X, Save, RefreshCw, Circle, Smartphone, Loader2, Cloud, HardDrive } from 'lucide-react';
+import { exportDataToJSON, exportTransactionsToCSV } from '../services/storageService';
+import { Download, Upload, FileText, Trash2, Wallet, Plus, Check, ChevronRight, ChevronDown, Edit2, X, Save, RefreshCw, Circle, Smartphone, Cloud, HardDrive } from 'lucide-react';
 import { ICON_MAP, ICON_KEYS, AVAILABLE_COLORS } from '../constants';
 
 interface Props {
@@ -32,11 +32,9 @@ const Settings: React.FC<Props> = ({
     installPrompt
 }) => {
   const jsonInputRef = useRef<HTMLInputElement>(null);
-  const csvInputRef = useRef<HTMLInputElement>(null);
   const [newBookName, setNewBookName] = useState('');
   const [newBookCurrency, setNewBookCurrency] = useState('€');
   const [isAddingBook, setIsAddingBook] = useState(false);
-  const [isImporting, setIsImporting] = useState(false);
   
   // Edit Book State
   const [editingBook, setEditingBook] = useState<Book | null>(null);
@@ -84,32 +82,6 @@ const Settings: React.FC<Props> = ({
     };
     reader.readAsText(file);
     if (jsonInputRef.current) jsonInputRef.current.value = '';
-  };
-
-  const handleCsvUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    // Do NOT set state here (setIsImporting) as it causes re-render and might lose file reference
-    try {
-      const rows = await parseCSV(file);
-      
-      // Now it's safe to update state if we want to show a spinner, but since parsing is done, we just process.
-      if (rows.length === 0) {
-          alert("No valid transactions found.\n\nEnsure the CSV has columns: Date, Amount, and Category.");
-          return;
-      }
-
-      const { data: newData, stats } = mergeCSVData(data, rows, activeBook.id);
-      onImport(newData);
-      alert(stats);
-      
-    } catch (err) { 
-        console.error(err);
-        alert("Error parsing CSV. Please check the file format."); 
-    } finally {
-        if (csvInputRef.current) csvInputRef.current.value = '';
-    }
   };
 
   const handleCreateBook = () => {
@@ -684,23 +656,6 @@ const Settings: React.FC<Props> = ({
             )
           })}
         </div>
-      </section>
-
-      {/* Import CSV */}
-      <section className="bg-white rounded-2xl p-6 shadow-sm mb-6">
-        <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-4">Import CSV</h3>
-        <button 
-          type="button"
-          onClick={() => csvInputRef.current?.click()}
-          disabled={isImporting}
-          className="w-full flex items-center justify-between p-4 bg-purple-50 rounded-xl text-purple-700 hover:bg-purple-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          <span className="flex items-center gap-3 font-medium">
-            {isImporting ? <Loader2 size={20} className="animate-spin" /> : <FileText size={20} />}
-            {isImporting ? 'Importing...' : 'Import Transactions (CSV)'}
-          </span>
-        </button>
-        <input type="file" accept=".csv" ref={csvInputRef} onChange={handleCsvUpload} className="hidden" />
       </section>
 
       <div className="text-center pt-2 text-[10px] text-gray-300">
